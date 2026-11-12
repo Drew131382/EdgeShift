@@ -2,7 +2,7 @@ import Foundation
 
 import CoreGraphics
 
-enum Side { case left, right, top, bottom }
+enum Side: String, Codable, Hashable { case left, right, top, bottom }
 
 enum LayoutGeometry {
     // Snap to the closest edge, preserving an overlap of at least one logical point.

@@ -1,37 +1,78 @@
 import AppKit
 import CoreGraphics
 
-struct DisplayItem: Equatable, Identifiable {
-    let id: CGDirectDisplayID
-    let bounds: CGRect
-    let name: String
-}
-
-struct DisplaySnapshot: Equatable {
-    let mainID: CGDirectDisplayID
-    // Preserve the order returned by CGGetOnlineDisplayList.
-    let displays: [DisplayItem]
-    var main: CGRect { displays.first(where: { $0.id == mainID })!.bounds }
-    var secondaries: [DisplayItem] { displays.filter { $0.id != mainID } }
-    func number(for id: CGDirectDisplayID) -> Int { (displays.firstIndex(where: { $0.id == id }) ?? 0) + 1 }
-}
-
 enum DisplayManager {
-    static func snapshot() -> DisplaySnapshot? {
+    static func topology() -> DisplayTopology? {
         var count: UInt32 = 0
-        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count >= 2 else { return nil }
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return nil }
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetOnlineDisplayList(count, &ids, &count) == .success, count >= 2 else { return nil }
+        guard CGGetOnlineDisplayList(count, &ids, &count) == .success, count > 0 else { return nil }
         ids = Array(ids.prefix(Int(count)))
-        let main = CGMainDisplayID()
-        guard ids.contains(main), ids.allSatisfy({ CGDisplayIsInMirrorSet($0) == 0 && CGDisplayIsActive($0) != 0 }) else { return nil }
+        let systemMain = CGMainDisplayID()
+        let mainSource = CGDisplayMirrorsDisplay(systemMain)
+        let main = mainSource == kCGNullDirectDisplay ? systemMain : mainSource
+        guard ids.contains(main) else { return nil }
         let screens = NSScreen.screens
         let displays = ids.map { id in
             let name = screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id }?.localizedName ?? "显示器"
-            return DisplayItem(id: id, bounds: CGDisplayBounds(id), name: name)
+            let source = CGDisplayMirrorsDisplay(id)
+            return ConnectedDisplay(id: id, bounds: CGDisplayBounds(id), name: name,
+                                    isActive: CGDisplayIsActive(id) != 0,
+                                    mirrorSourceID: source == kCGNullDirectDisplay ? nil : source)
         }
-        return DisplaySnapshot(mainID: main, displays: displays)
+        return DisplayTopology(mainID: main, displays: displays)
     }
+
+    static func snapshot() -> DisplaySnapshot? { topology()?.arrangement }
+
+    static func setMode(_ topology: DisplayTopology, displayID: CGDirectDisplayID, mode: DisplayMode,
+                        readTopology: () -> DisplayTopology? = DisplayManager.topology,
+                        applyMirror: (CGDirectDisplayID, CGDirectDisplayID) -> String? = DisplayManager.configureMirror) -> String? {
+        guard readTopology() == topology else { return "显示器状态已改变，请重试。" }
+        if let error = topology.modeChangeError(displayID: displayID, mode: mode) { return error }
+        guard topology.secondaries.first(where: { $0.id == displayID })?.mode != mode else { return nil }
+        return applyMirror(displayID, mode == .mirrored ? topology.mainID : kCGNullDirectDisplay)
+    }
+
+    private static func configureMirror(displayID: CGDirectDisplayID, sourceID: CGDirectDisplayID) -> String? {
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return "无法开始显示器配置。" }
+        let result = CGConfigureDisplayMirrorOfDisplay(config, displayID, sourceID)
+        guard result == .success else {
+            CGCancelDisplayConfiguration(config)
+            return "无法设置显示模式（\(result.rawValue)）。"
+        }
+        let complete = CGCompleteDisplayConfiguration(config, .permanently)
+        guard complete == .success else { return "无法应用显示模式（\(complete.rawValue)）。" }
+        return nil
+    }
+
+    static func setMainDisplay(_ topology: DisplayTopology, displayID: CGDirectDisplayID,
+                               readTopology: () -> DisplayTopology? = DisplayManager.topology,
+                               applyOrigins: ([DisplayOrigin]) -> String? = DisplayManager.configureMainDisplayOrigins) -> String? {
+        guard readTopology() == topology else { return "显示器状态已改变，请重试。" }
+        if let error = topology.mainDisplayChangeError(displayID: displayID) { return error }
+        guard displayID != topology.mainID else { return nil }
+        guard let origins = topology.originsForMainDisplay(displayID) else { return "显示器坐标超出可配置范围。" }
+        return applyOrigins(origins)
+    }
+
+    private static func configureMainDisplayOrigins(_ origins: [DisplayOrigin]) -> String? {
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return "无法开始显示器配置。" }
+        // Apply the chosen main display at (0, 0) last, in the same transaction.
+        for origin in origins {
+            let result = CGConfigureDisplayOrigin(config, origin.displayID, origin.x, origin.y)
+            guard result == .success else {
+                CGCancelDisplayConfiguration(config)
+                return "无法设置主显示器位置（\(result.rawValue)）。"
+            }
+        }
+        let complete = CGCompleteDisplayConfiguration(config, .permanently)
+        guard complete == .success else { return "无法应用主显示器设置（\(complete.rawValue)）。" }
+        return nil
+    }
+
     static func arrange(_ snapshot: DisplaySnapshot, displayID: CGDirectDisplayID, origin: CGPoint) -> String? {
         guard self.snapshot() == snapshot else { return "显示器状态已改变，请重试。" }
         guard let target = snapshot.secondaries.first(where: { $0.id == displayID }) else { return "找不到目标副屏，请重试。" }

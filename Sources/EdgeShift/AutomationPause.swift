@@ -10,13 +10,39 @@ struct PausedApplication: Codable, Equatable, Identifiable {
 struct PauseSettings: Codable, Equatable {
     static let defaultsKey = "automaticPauseSettings"
     var whenFullscreen = true
+    // Edges of the main display whose outer push never counts as a trigger, so a
+    // user can reserve them for gestures like Universal Control.
+    private(set) var reservedSides: [Side] = []
     private(set) var applications: [PausedApplication] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case whenFullscreen, reservedSides, applications
+    }
+
+    init() {}
+
+    // Custom decoding keeps older saves readable: missing keys fall back to the
+    // defaults instead of discarding the saved application list wholesale.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        whenFullscreen = try container.decodeIfPresent(Bool.self, forKey: .whenFullscreen) ?? true
+        reservedSides = try container.decodeIfPresent([Side].self, forKey: .reservedSides) ?? []
+        applications = try container.decodeIfPresent([PausedApplication].self, forKey: .applications) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(whenFullscreen, forKey: .whenFullscreen)
+        try container.encode(reservedSides, forKey: .reservedSides)
+        try container.encode(applications, forKey: .applications)
+    }
 
     static func load(from defaults: UserDefaults, ownBundleID: String) -> PauseSettings {
         guard let data = defaults.data(forKey: defaultsKey),
               let saved = try? JSONDecoder().decode(PauseSettings.self, from: data) else { return PauseSettings() }
         var settings = PauseSettings()
         settings.whenFullscreen = saved.whenFullscreen
+        settings.reservedSides = saved.reservedSides
         for app in saved.applications { _ = settings.add(app, ownBundleID: ownBundleID) }
         return settings
     }
@@ -37,6 +63,17 @@ struct PauseSettings: Codable, Equatable {
 
     mutating func remove(bundleID: String) {
         applications.removeAll { $0.bundleID == bundleID }
+    }
+
+    /// Kept in a fixed [left, right, top, bottom] order so stored data and UI stay stable.
+    mutating func setReserved(_ side: Side, reserved: Bool) {
+        var sides = Set(reservedSides)
+        if reserved { sides.insert(side) } else { sides.remove(side) }
+        reservedSides = [Side.left, .right, .top, .bottom].filter { sides.contains($0) }
+    }
+
+    func reserves(_ side: Side) -> Bool {
+        reservedSides.contains(side)
     }
 }
 

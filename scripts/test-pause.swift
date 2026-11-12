@@ -48,6 +48,28 @@ import CoreGraphics
         defaults.set(Data("invalid".utf8), forKey: PauseSettings.defaultsKey)
         precondition(PauseSettings.load(from: defaults, ownBundleID: "com.edgeshift.app") == PauseSettings())
 
+        var reserved = PauseSettings()
+        reserved.setReserved(.right, reserved: true)
+        reserved.setReserved(.top, reserved: true)
+        reserved.setReserved(.right, reserved: true)
+        precondition(reserved.reserves(.right) && reserved.reserves(.top) && !reserved.reserves(.left))
+        reserved.setReserved(.right, reserved: false)
+        precondition(reserved.reservedSides == [.top])
+        reserved.setReserved(.top, reserved: false)
+        precondition(reserved.reservedSides.isEmpty)
+        reserved.save(to: defaults)
+        precondition(PauseSettings.load(from: defaults, ownBundleID: "com.edgeshift.app") == reserved)
+        // Saves written before "reservedSides" existed must decode without losing the rest.
+        let legacy = #"{"whenFullscreen":false,"applications":[{"bundleID":"org.example.game","name":"Game"}]}"#
+        defaults.set(Data(legacy.utf8), forKey: PauseSettings.defaultsKey)
+        var legacyDecoded = PauseSettings.load(from: defaults, ownBundleID: "com.edgeshift.app")
+        precondition(!legacyDecoded.whenFullscreen && legacyDecoded.reservedSides.isEmpty
+            && legacyDecoded.applications == [PausedApplication(bundleID: "org.example.game", name: "Game")])
+        legacyDecoded.setReserved(.bottom, reserved: true)
+        legacyDecoded.save(to: defaults)
+        let upgraded = PauseSettings.load(from: defaults, ownBundleID: "com.edgeshift.app")
+        precondition(upgraded.reservedSides == [.bottom] && upgraded.applications.count == 1)
+
         var current: ForegroundApplication? = app
         var query = context(main).windows
         var running = true
@@ -75,6 +97,6 @@ import CoreGraphics
         precondition(session.update(edge: .right, time: 1.81, duration: 0.3, allowed: true) == 1)
         precondition(!session.permitsQueuedMove(ticket: session.generation, allowed: false))
         precondition(session.permitsQueuedMove(ticket: session.generation, allowed: true))
-        print("Automatic pause checks passed: fullscreen geometry, foreground apps, persistence, own UI, progress reset and queued cancellation.")
+        print("Automatic pause checks passed: fullscreen geometry, foreground apps, persistence, own UI, reserved edges with legacy saves, progress reset and queued cancellation.")
     }
 }

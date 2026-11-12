@@ -10,7 +10,7 @@ final class PauseSettingsWindowController {
 
     func show() {
         if window == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 460),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 580),
                                   styleMask: [.titled, .closable, .miniaturizable],
                                   backing: .buffered, defer: false)
             window.title = "EdgeShift · 自动暂停"
@@ -95,10 +95,29 @@ private struct PauseSettingsView: View {
             }.frame(height: 174)
             Text("名单中的应用仅在前台时暂停，切换离开后恢复。恢复后需重新持续推动鼠标。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("保留边缘").font(.headline)
+                Text("勾选的边缘不再累计推动，也不会重排显示器，其余方向照常；可把某条边缘留给通用控制等系统的边缘手势。")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    sideToggle("上边缘", side: .top)
+                    sideToggle("下边缘", side: .bottom)
+                    sideToggle("左边缘", side: .left)
+                    sideToggle("右边缘", side: .right)
+                }
+            }
             Text(model.pauseSettingsMessage ?? "设置会自动保存。")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 .frame(maxWidth: .infinity, minHeight: 30, alignment: .topLeading)
         }.padding(24).frame(width: 480)
+    }
+
+    private func sideToggle(_ title: String, side: Side) -> some View {
+        Toggle(title, isOn: Binding(
+            get: { model.pauseSettings.reserves(side) },
+            set: { model.setReserved(side, reserved: $0) }))
+            .toggleStyle(.button)
     }
 
     private func icon(for app: PausedApplication) -> NSImage {
