@@ -2,12 +2,19 @@ import SwiftUI
 import AppKit
 import Combine
 
+// AppKit lifecycle only. A SwiftUI `Settings { EmptyView() }` scene was the
+// app's sole scene, so macOS opened its window ("EdgeShift Settings") on every
+// launch. This app lives entirely in the menu bar and owns its windows itself,
+// so it runs NSApplication directly instead of hosting a SwiftUI scene.
 @main
-struct EdgeShiftApp: App {
-    @NSApplicationDelegateAdaptor(MenuBarController.self) private var controller
-
-    var body: some Scene {
-        Settings { EmptyView() }
+enum EdgeShiftMain {
+    @MainActor
+    static func main() {
+        let app = NSApplication.shared
+        let controller = MenuBarController()
+        app.delegate = controller
+        app.setActivationPolicy(.accessory)
+        app.run()
     }
 }
 
@@ -143,6 +150,7 @@ struct ContentView: View {
                 .opacity(model.progress > 0 ? 1 : 0)
                 .accessibilityHidden(model.progress <= 0)
             Toggle("登录时自动启动", isOn: Binding(get: { model.loginEnabled }, set: { model.setLogin($0) }))
+            Toggle("穿过主屏水波动画", isOn: $model.rippleEnabled)
             Button("自动暂停设置…") { model.showPauseSettings() }
             Divider()
             VStack(alignment: .leading, spacing: 2) {

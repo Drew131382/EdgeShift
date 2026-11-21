@@ -12,6 +12,16 @@ final class AppModel: ObservableObject {
     @Published var notice: String?
     @Published var progress = 0.0
     @Published var enabled: Bool { didSet { defaults.set(enabled, forKey: "enabled"); invalidateAutomation(); updateTap(); refresh() } }
+    @Published var rippleEnabled: Bool {
+        didSet {
+            defaults.set(rippleEnabled, forKey: "rippleEnabled")
+            if !rippleEnabled {
+                lastMouseLocation = nil
+                endPushRipple()
+            }
+            updateTap()
+        }
+    }
     @Published var duration: Double { didSet { defaults.set(duration, forKey: "duration"); invalidateAutomation() } }
     @Published var pauseSettings: PauseSettings {
         didSet {
@@ -39,6 +49,10 @@ final class AppModel: ObservableObject {
     private var foregroundApplication: ForegroundApplication?
     private lazy var pauseSettingsWindow = PauseSettingsWindowController(model: self)
     private var cooldownUntil: TimeInterval = 0
+    private var rippleCooldownUntil: TimeInterval = 0
+    private var lastMouseLocation: CGPoint?
+    private var isPushRippleActive = false
+    private var rippleOverlay: WaterRippleOverlay?
     private var timer: Timer?
     private var isArranging = false
     private var screenLocked = false
@@ -59,6 +73,7 @@ final class AppModel: ObservableObject {
         self.applyMainDisplay = applyMainDisplay
         self.uptime = uptime
         enabled = defaults.object(forKey: "enabled") as? Bool ?? true
+        rippleEnabled = defaults.object(forKey: "rippleEnabled") as? Bool ?? true
         duration = defaults.object(forKey: "duration") as? Double ?? 2
         pauseSettings = PauseSettings.load(from: defaults, ownBundleID: ownBundleID)
         refresh()
@@ -82,9 +97,9 @@ final class AppModel: ObservableObject {
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(lockScreen), name: Notification.Name("com.apple.screenIsLocked"), object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(unlockScreen), name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
     }
-    @objc private func lockScreen() { screenLocked = true; invalidateAutomation() }
-    @objc private func unlockScreen() { screenLocked = false; invalidateAutomation(); refresh() }
-    @objc private func wake() { invalidateAutomation(); refresh(); updateTap() }
+    @objc private func lockScreen() { screenLocked = true; lastMouseLocation = nil; invalidateAutomation() }
+    @objc private func unlockScreen() { screenLocked = false; lastMouseLocation = nil; invalidateAutomation(); refresh() }
+    @objc private func wake() { lastMouseLocation = nil; invalidateAutomation(); refresh(); updateTap() }
     @objc private func frontmostChanged() { refreshAutomationContext() }
     @objc private func spaceChanged() { invalidateAutomation(); refreshAutomationContext() }
 
@@ -164,6 +179,7 @@ final class AppModel: ObservableObject {
                 displayCycle.reset()
             }
             snapshot = new
+            lastMouseLocation = nil
             invalidateAutomation()
         }
         let selection = newTopology?.selection(preserving: manualDisplayID) ?? 0
@@ -294,8 +310,16 @@ final class AppModel: ObservableObject {
         refreshLogin()
     }
     func refreshLogin() { loginEnabled = SMAppService.mainApp.status == .enabled }
-    private func reset() { pushSession.reset(); if progress != 0 { progress = 0 } }
-    private func invalidateAutomation() { pushSession.invalidate(); if progress != 0 { progress = 0 } }
+    private func reset() {
+        pushSession.reset()
+        if progress != 0 { progress = 0 }
+        endPushRipple()
+    }
+    private func invalidateAutomation() {
+        pushSession.invalidate()
+        if progress != 0 { progress = 0 }
+        endPushRipple()
+    }
     @discardableResult
     func arrange(displayID: CGDirectDisplayID, origin: CGPoint) -> Bool {
         guard let s = snapshot, !isArranging, !isChangingDisplays else { return false }
@@ -322,7 +346,7 @@ final class AppModel: ObservableObject {
         guard startsServices else { return }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes); self.source = nil }
         if let tap { CFMachPortInvalidate(tap); self.tap = nil }
-        guard enabled, CGPreflightListenEventAccess() else { return }
+        guard enabled || rippleEnabled, CGPreflightListenEventAccess() else { return }
         let mask = CGEventMask(1 << CGEventType.mouseMoved.rawValue)
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask, callback: { _, type, event, info in
             guard let info else { return Unmanaged.passUnretained(event) }
@@ -337,13 +361,57 @@ final class AppModel: ObservableObject {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
     }
+    private func withRippleOverlay(_ body: @escaping @MainActor (WaterRippleOverlay) -> Void) {
+        guard startsServices else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let overlay = self.rippleOverlay ?? {
+                let created = WaterRippleOverlay()
+                self.rippleOverlay = created
+                return created
+            }()
+            body(overlay)
+        }
+    }
+
+    private func updatePushRipple(at point: CGPoint, displayID: CGDirectDisplayID, progress: Double) {
+        isPushRippleActive = true
+        withRippleOverlay { overlay in
+            overlay.updatePush(at: point, displayID: displayID, progress: progress)
+        }
+    }
+
+    private func endPushRipple() {
+        guard isPushRippleActive else { return }
+        isPushRippleActive = false
+        withRippleOverlay { overlay in
+            overlay.endPush()
+        }
+    }
+
+    private func triggerHighlightRipple(at point: CGPoint, displayID: CGDirectDisplayID) {
+        isPushRippleActive = false
+        withRippleOverlay { overlay in
+            overlay.triggerHighlightWave(at: point, displayID: displayID)
+        }
+    }
+
     private func handle(_ event: CGEvent) {
         let now = ProcessInfo.processInfo.systemUptime
+        let p = event.location
+        let prev = lastMouseLocation
+        lastMouseLocation = p
+
+        if rippleEnabled, !screenLocked, let s = snapshot, let prev, now >= rippleCooldownUntil,
+           let crossing = LayoutGeometry.mainBoundaryCrossing(from: prev, to: p, main: s.main, secondaries: s.secondaries.map(\.bounds)) {
+            rippleCooldownUntil = now + 0.35
+            triggerHighlightRipple(at: crossing.point, displayID: s.mainID)
+        }
+
         guard automaticReady, !isArranging, now >= cooldownUntil, let s = snapshot,
               !CGEventSource.buttonState(.combinedSessionState, button: .left),
               !CGEventSource.buttonState(.combinedSessionState, button: .right),
               !CGEventSource.buttonState(.combinedSessionState, button: .center) else { reset(); return }
-        let p = event.location
         let dx = CGFloat(event.getIntegerValueField(.mouseEventDeltaX))
         let dy = CGFloat(event.getIntegerValueField(.mouseEventDeltaY))
         guard let edge = LayoutGeometry.outwardEdge(point: p, deltaX: dx, deltaY: dy, main: s.main),
@@ -363,8 +431,18 @@ final class AppModel: ObservableObject {
                 self.refresh()
                 guard self.pushSession.permitsQueuedMove(ticket: ticket, allowed: self.automaticReady),
                       self.snapshot == s else { return }
-                if self.move(displayID: target, edge: edge) { self.displayCycle.didMove(target) }
+                if self.move(displayID: target, edge: edge) {
+                    self.displayCycle.didMove(target)
+                    if self.rippleEnabled {
+                        self.rippleCooldownUntil = self.uptime() + 0.45
+                        self.triggerHighlightRipple(at: p, displayID: s.mainID)
+                    }
+                }
             }
+        } else if rippleEnabled {
+            updatePushRipple(at: p, displayID: s.mainID, progress: progress)
+        } else {
+            endPushRipple()
         }
     }
 }

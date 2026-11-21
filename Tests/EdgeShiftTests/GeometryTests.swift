@@ -79,4 +79,36 @@ final class GeometryTests: XCTestCase {
         XCTAssertEqual(cycle.next(in: [7, 42]), 7)
         XCTAssertNil(cycle.next(in: []))
     }
+
+    func testMainBoundaryCrossingDetectsAllEdgesAndIgnoresSameScreenMoves() {
+        let main = CGRect(x: 0, y: 0, width: 1000, height: 800)
+        let secondaries = [
+            CGRect(x: 1000, y: 0, width: 800, height: 800),
+            CGRect(x: -800, y: 0, width: 800, height: 800),
+            CGRect(x: 0, y: -600, width: 1000, height: 600),
+            CGRect(x: 0, y: 800, width: 1000, height: 600)
+        ]
+        XCTAssertEqual(
+            LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 995, y: 400), to: CGPoint(x: 1005, y: 400), main: main, secondaries: secondaries),
+            BoundaryCrossing(edge: .right, point: CGPoint(x: 1000, y: 400))
+        )
+        XCTAssertEqual(
+            LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 1005, y: 400), to: CGPoint(x: 995, y: 400), main: main, secondaries: secondaries),
+            BoundaryCrossing(edge: .right, point: CGPoint(x: 1000, y: 400))
+        )
+        XCTAssertEqual(
+            LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 5, y: 300), to: CGPoint(x: -5, y: 300), main: main, secondaries: secondaries),
+            BoundaryCrossing(edge: .left, point: CGPoint(x: 0, y: 300))
+        )
+        XCTAssertEqual(
+            LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 500, y: 5), to: CGPoint(x: 500, y: -5), main: main, secondaries: secondaries),
+            BoundaryCrossing(edge: .top, point: CGPoint(x: 500, y: 0))
+        )
+        XCTAssertEqual(
+            LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 500, y: 795), to: CGPoint(x: 500, y: 805), main: main, secondaries: secondaries),
+            BoundaryCrossing(edge: .bottom, point: CGPoint(x: 500, y: 800))
+        )
+        XCTAssertNil(LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 100, y: 100), to: CGPoint(x: 200, y: 200), main: main, secondaries: secondaries))
+        XCTAssertNil(LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 1100, y: 100), to: CGPoint(x: 1200, y: 200), main: main, secondaries: secondaries))
+    }
 }
