@@ -15,11 +15,7 @@ final class AppModel: ObservableObject {
     @Published var rippleEnabled: Bool {
         didSet {
             defaults.set(rippleEnabled, forKey: "rippleEnabled")
-            if !rippleEnabled {
-                lastMouseLocation = nil
-                endPushRipple()
-            }
-            updateTap()
+            if !rippleEnabled { endPushRipple() }
         }
     }
     @Published var duration: Double { didSet { defaults.set(duration, forKey: "duration"); invalidateAutomation() } }
@@ -34,6 +30,7 @@ final class AppModel: ObservableObject {
     @Published var pauseSettingsMessage: String?
     @Published var loginEnabled = false
     @Published var permission = false
+    @Published private(set) var screenCapturePermission = false
     @Published var manualDisplayID: CGDirectDisplayID = 0
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
@@ -49,8 +46,6 @@ final class AppModel: ObservableObject {
     private var foregroundApplication: ForegroundApplication?
     private lazy var pauseSettingsWindow = PauseSettingsWindowController(model: self)
     private var cooldownUntil: TimeInterval = 0
-    private var rippleCooldownUntil: TimeInterval = 0
-    private var lastMouseLocation: CGPoint?
     private var isPushRippleActive = false
     private var rippleOverlay: WaterRippleOverlay?
     private var timer: Timer?
@@ -97,9 +92,9 @@ final class AppModel: ObservableObject {
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(lockScreen), name: Notification.Name("com.apple.screenIsLocked"), object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(unlockScreen), name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
     }
-    @objc private func lockScreen() { screenLocked = true; lastMouseLocation = nil; invalidateAutomation() }
-    @objc private func unlockScreen() { screenLocked = false; lastMouseLocation = nil; invalidateAutomation(); refresh() }
-    @objc private func wake() { lastMouseLocation = nil; invalidateAutomation(); refresh(); updateTap() }
+    @objc private func lockScreen() { screenLocked = true; invalidateAutomation() }
+    @objc private func unlockScreen() { screenLocked = false; invalidateAutomation(); refresh() }
+    @objc private func wake() { invalidateAutomation(); refresh(); updateTap() }
     @objc private func frontmostChanged() { refreshAutomationContext() }
     @objc private func spaceChanged() { invalidateAutomation(); refreshAutomationContext() }
 
@@ -179,7 +174,6 @@ final class AppModel: ObservableObject {
                 displayCycle.reset()
             }
             snapshot = new
-            lastMouseLocation = nil
             invalidateAutomation()
         }
         let selection = newTopology?.selection(preserving: manualDisplayID) ?? 0
@@ -188,6 +182,8 @@ final class AppModel: ObservableObject {
         refreshPendingMainDisplayChange()
         let granted = CGPreflightListenEventAccess()
         if permission != granted { permission = granted; invalidateAutomation() }
+        let screenGranted = CGPreflightScreenCaptureAccess()
+        if screenCapturePermission != screenGranted { screenCapturePermission = screenGranted }
         refreshAutomationContext()
         if permission && notice == "请在系统设置的“隐私与安全性 → 输入监控”中开启 EdgeShift。" { notice = nil }
         let updatedStatus: String
@@ -303,6 +299,14 @@ final class AppModel: ObservableObject {
     func openPrivacy() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") { NSWorkspace.shared.open(url) }
     }
+    func requestScreenCapturePermission() {
+        _ = CGRequestScreenCaptureAccess()
+        screenCapturePermission = CGPreflightScreenCaptureAccess()
+        if !screenCapturePermission,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+    }
     func setLogin(_ on: Bool) {
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
@@ -346,7 +350,7 @@ final class AppModel: ObservableObject {
         guard startsServices else { return }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes); self.source = nil }
         if let tap { CFMachPortInvalidate(tap); self.tap = nil }
-        guard enabled || rippleEnabled, CGPreflightListenEventAccess() else { return }
+        guard enabled, CGPreflightListenEventAccess() else { return }
         let mask = CGEventMask(1 << CGEventType.mouseMoved.rawValue)
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask, callback: { _, type, event, info in
             guard let info else { return Unmanaged.passUnretained(event) }
@@ -399,14 +403,6 @@ final class AppModel: ObservableObject {
     private func handle(_ event: CGEvent) {
         let now = ProcessInfo.processInfo.systemUptime
         let p = event.location
-        let prev = lastMouseLocation
-        lastMouseLocation = p
-
-        if rippleEnabled, !screenLocked, let s = snapshot, let prev, now >= rippleCooldownUntil,
-           let crossing = LayoutGeometry.mainBoundaryCrossing(from: prev, to: p, main: s.main, secondaries: s.secondaries.map(\.bounds)) {
-            rippleCooldownUntil = now + 0.35
-            triggerHighlightRipple(at: crossing.point, displayID: s.mainID)
-        }
 
         guard automaticReady, !isArranging, now >= cooldownUntil, let s = snapshot,
               !CGEventSource.buttonState(.combinedSessionState, button: .left),
@@ -434,7 +430,6 @@ final class AppModel: ObservableObject {
                 if self.move(displayID: target, edge: edge) {
                     self.displayCycle.didMove(target)
                     if self.rippleEnabled {
-                        self.rippleCooldownUntil = self.uptime() + 0.45
                         self.triggerHighlightRipple(at: p, displayID: s.mainID)
                     }
                 }

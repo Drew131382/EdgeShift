@@ -150,7 +150,17 @@ struct ContentView: View {
                 .opacity(model.progress > 0 ? 1 : 0)
                 .accessibilityHidden(model.progress <= 0)
             Toggle("登录时自动启动", isOn: Binding(get: { model.loginEnabled }, set: { model.setLogin($0) }))
-            Toggle("穿过主屏水波动画", isOn: $model.rippleEnabled)
+            Toggle("边缘切换水波折射", isOn: $model.rippleEnabled)
+            if model.rippleEnabled && !model.screenCapturePermission {
+                HStack(spacing: 8) {
+                    Text("真实桌面像素折射需“屏幕录制”权限")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("去授权") { model.requestScreenCapturePermission() }
+                        .controlSize(.small)
+                }
+            }
             Button("自动暂停设置…") { model.showPauseSettings() }
             Divider()
             VStack(alignment: .leading, spacing: 2) {

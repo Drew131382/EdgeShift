@@ -250,7 +250,9 @@ final class WaterRippleOverlay: NSObject, MTKViewDelegate {
         #if canImport(ScreenCaptureKit)
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
               let display = content.displays.first(where: { $0.displayID == displayID }) else { return nil }
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let ownWindows = content.windows.filter { $0.owningApplication?.processID == ownPID }
+        let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
         let config = SCStreamConfiguration()
         config.width = display.width
         config.height = display.height
@@ -398,45 +400,48 @@ final class WaterRippleOverlay: NSObject, MTKViewDelegate {
         float activeW2 = diff2 >= 0.0 ? w1Front * 0.85 : w1Back * 0.78;
         float slope2 = -2.0 * diff2 / max(activeW2 * activeW2, 0.0001) * w2;
 
-        float slope = clamp((slope1 + slope2 * 0.6) * 0.020, -1.0, 1.0);
+        float slope = clamp((slope1 + slope2 * 0.6) * 0.024, -1.0, 1.0);
 
         // Smooth fade-in, radial distance attenuation, and graceful temporal fade-out.
         float timeEnvelope = smoothstep(0.0, 0.06, t) * (1.0 - smoothstep(0.38, 1.0, t));
         float spatialDecay = exp(-pow(d / max(maxR * 0.70, 0.01), 2.0) * 1.9)
                            * (1.0 - smoothstep(maxR * 0.62, maxR, d));
         float envelope = timeEnvelope * spatialDecay;
-        float caustic = 0.88 + 0.12 * sin(angle * 13.0 + t * 10.0) * cos(angle * 5.0 - t * 6.0);
-        float contactBloom = exp(-dist * 14.0) * smoothstep(0.0, 0.04, t) * (1.0 - smoothstep(0.08, 0.36, t));
+        float caustic = 0.86 + 0.14 * sin(angle * 13.0 + t * 10.0) * cos(angle * 5.0 - t * 6.0);
+        float contactBloom = exp(-dist * 16.0) * smoothstep(0.0, 0.04, t) * (1.0 - smoothstep(0.08, 0.34, t));
 
         float outerFringe = max(0.0, -slope);
         float innerFringe = max(0.0, slope);
 
-        float3 pearlWhite = float3(1.0, 1.0, 1.0);
-        float3 frostedIce = float3(0.78, 0.91, 1.0);
-        float3 cyanDisp   = float3(0.42, 0.90, 1.0);
-        float3 roseViolet = float3(0.86, 0.64, 1.0);
+        float3 pearlWhite = float3(0.95, 0.98, 1.0);
+        float3 frostedIce = float3(0.58, 0.82, 1.0);
+        float3 cyanDisp   = float3(0.24, 0.88, 1.0);
+        float3 amberDisp  = float3(1.0, 0.76, 0.42);
+        float3 roseViolet = float3(0.78, 0.44, 1.0);
 
-        // Extra luminous highlight ridge for the post-crossing breakthrough wave.
-        float crestCore = pow(clamp(w1, 0.0, 1.0), 1.85) * caustic;
-        float highlightFlash = pow(clamp(w1, 0.0, 1.0), 3.4) * (1.0 - smoothstep(0.15, 0.75, t));
-        float frostedWake = clamp(combinedWave * 0.70, 0.0, 1.0);
+        // Keep white highlight subtle and crisp; emphasize chromatic dispersion & refraction.
+        float crestCore = pow(clamp(w1, 0.0, 1.0), 4.2) * caustic;
+        float highlightFlash = pow(clamp(w1, 0.0, 1.0), 5.5) * (1.0 - smoothstep(0.12, 0.60, t));
+        float frostedWake = clamp(combinedWave * 0.45, 0.0, 1.0);
 
-        res.glassColor = (pearlWhite * (crestCore * 1.15 + highlightFlash * 0.65)
-                        + frostedIce * frostedWake * 0.48
+        res.glassColor = (pearlWhite * (crestCore * 0.28 + highlightFlash * 0.16)
+                        + frostedIce * frostedWake * 0.14
                         + cyanDisp * outerFringe * 0.62
-                        + roseViolet * innerFringe * 0.46
-                        + pearlWhite * contactBloom * 1.05) * envelope;
+                        + roseViolet * innerFringe * 0.56
+                        + amberDisp * pow(outerFringe, 1.6) * 0.28
+                        + cyanDisp * contactBloom * 0.30
+                        + pearlWhite * contactBloom * 0.18) * envelope;
 
         res.glassAlpha = clamp(
-            (crestCore * 0.80 + highlightFlash * 0.30 + frostedWake * 0.36 + (outerFringe + innerFringe) * 0.28 + contactBloom * 0.70) * envelope,
+            (crestCore * 0.30 + highlightFlash * 0.12 + frostedWake * 0.16 + (outerFringe + innerFringe) * 0.36 + contactBloom * 0.28) * envelope,
             0.0,
-            0.96
+            0.78
         );
 
-        float dispStrength = (0.044 * (1.0 - 0.32 * eased)) * envelope;
+        float dispStrength = (0.088 * (1.0 - 0.28 * eased)) * envelope;
         float2 dirUV = float2(dir.x / max(aspect, 0.001), dir.y);
         res.dispUV = dirUV * slope * dispStrength;
-        res.refrMask = clamp(combinedWave * envelope * 1.30, 0.0, 1.0);
+        res.refrMask = clamp(combinedWave * envelope * 1.45, 0.0, 1.0);
         return res;
     }
 
@@ -481,28 +486,30 @@ final class WaterRippleOverlay: NSObject, MTKViewDelegate {
         float freq = mix(26.0, 34.0, strength);
         float speed = mix(4.2, 8.2, strength);
         float phase = d * freq - time * speed;
-        float waveRings = pow(0.5 + 0.5 * sin(phase), 3.0) * smoothstep(0.006, 0.035, d) * radialDecay;
-        float ringSlope = cos(phase) * smoothstep(0.006, 0.035, d) * radialDecay * 0.55;
+        float waveRings = pow(0.5 + 0.5 * sin(phase), 3.2) * smoothstep(0.006, 0.035, d) * radialDecay;
+        float ringSlope = cos(phase) * smoothstep(0.006, 0.035, d) * radialDecay * 0.72;
 
-        float3 pearlWhite = float3(0.98, 0.995, 1.0);
-        float3 frostedIce = float3(0.72, 0.88, 1.0);
-        float3 cyanTint   = float3(0.40, 0.88, 1.0);
-        float3 violetTint = float3(0.80, 0.60, 1.0);
+        float3 pearlWhite = float3(0.95, 0.98, 1.0);
+        float3 frostedIce = float3(0.58, 0.82, 1.0);
+        float3 cyanTint   = float3(0.24, 0.88, 1.0);
+        float3 amberTint  = float3(1.0, 0.76, 0.42);
+        float3 violetTint = float3(0.78, 0.44, 1.0);
 
         float outerFringe = max(0.0, -ringSlope);
         float innerFringe = max(0.0, ringSlope);
 
         float vis = presence * intensity;
-        res.glassColor = (pearlWhite * (dome * 0.62 + waveRings * 0.72)
-                        + frostedIce * (dome * 0.35 + radialDecay * 0.25)
-                        + cyanTint * outerFringe * 0.45
-                        + violetTint * innerFringe * 0.35) * vis;
+        res.glassColor = (pearlWhite * (dome * 0.16 + waveRings * 0.24)
+                        + frostedIce * (dome * 0.14 + radialDecay * 0.10)
+                        + cyanTint * outerFringe * 0.52
+                        + violetTint * innerFringe * 0.46
+                        + amberTint * pow(outerFringe, 1.6) * 0.22) * vis;
 
-        res.glassAlpha = clamp((dome * 0.48 + waveRings * 0.42 + radialDecay * 0.16) * vis, 0.0, 0.88);
+        res.glassAlpha = clamp((dome * 0.22 + waveRings * 0.28 + (outerFringe + innerFringe) * 0.24 + radialDecay * 0.08) * vis, 0.0, 0.76);
 
         float2 dirUV = float2(dir.x / max(aspect, 0.001), dir.y);
-        res.dispUV = dirUV * ringSlope * 0.022 * vis;
-        res.refrMask = clamp((dome * 0.5 + waveRings * 0.9) * vis, 0.0, 1.0);
+        res.dispUV = dirUV * ringSlope * 0.048 * vis;
+        res.refrMask = clamp((dome * 0.55 + waveRings * 1.1) * vis, 0.0, 1.0);
         return res;
     }
 
@@ -522,7 +529,7 @@ final class WaterRippleOverlay: NSObject, MTKViewDelegate {
 
         float3 totalGlass = charge.glassColor + w0.glassColor + w1.glassColor;
         float glassAlpha = clamp(max(charge.glassAlpha, max(w0.glassAlpha, w1.glassAlpha))
-                               + min(charge.glassAlpha, max(w0.glassAlpha, w1.glassAlpha)) * 0.35, 0.0, 0.96);
+                               + min(charge.glassAlpha, max(w0.glassAlpha, w1.glassAlpha)) * 0.35, 0.0, 0.84);
 
         float2 totalDisp = charge.dispUV + w0.dispUV + w1.dispUV;
         float refrMask = clamp(max(charge.refrMask, max(w0.refrMask, w1.refrMask)), 0.0, 1.0);
@@ -530,15 +537,22 @@ final class WaterRippleOverlay: NSObject, MTKViewDelegate {
         float3 refractedColor = float3(0.0);
         float refrAlpha = 0.0;
         if (hasBackdrop > 0.5 && refrMask > 0.002) {
-            float r = backdrop.sample(backdropSampler, clamp(in.uv - totalDisp * 0.78, 0.001, 0.999)).r;
-            float g = backdrop.sample(backdropSampler, clamp(in.uv - totalDisp * 1.04, 0.001, 0.999)).g;
-            float b = backdrop.sample(backdropSampler, clamp(in.uv - totalDisp * 1.35, 0.001, 0.999)).b;
+            // 5-tap spectral chromatic dispersion across RGB channels for rich optical refraction.
+            float3 sR = backdrop.sample(backdropSampler, clamp(in.uv - totalDisp * 0.52, 0.001, 0.999)).rgb;
+            float3 sY = backdrop.sample(backdropSampler, clamp(in.uv - totalDisp * 0.80, 0.001, 0.999)).rgb;
+            float3 sG = backdrop.sample(backdropSampler, clamp(in.uv - totalDisp * 1.06, 0.001, 0.999)).rgb;
+            float3 sC = backdrop.sample(backdropSampler, clamp(in.uv - totalDisp * 1.34, 0.001, 0.999)).rgb;
+            float3 sB = backdrop.sample(backdropSampler, clamp(in.uv - totalDisp * 1.66, 0.001, 0.999)).rgb;
+
+            float r = sR.r * 0.72 + sY.r * 0.28;
+            float g = sY.g * 0.25 + sG.g * 0.50 + sC.g * 0.25;
+            float b = sC.b * 0.28 + sB.b * 0.72;
             refractedColor = float3(r, g, b) * refrMask;
             refrAlpha = refrMask;
         }
 
-        float3 finalRGB = refractedColor * (1.0 - glassAlpha * 0.30) + totalGlass;
-        float finalAlpha = clamp(max(refrAlpha, glassAlpha), 0.0, 0.96);
+        float3 finalRGB = refractedColor * (1.0 - glassAlpha * 0.22) + totalGlass;
+        float finalAlpha = clamp(max(refrAlpha, glassAlpha), 0.0, 0.94);
 
         return float4(finalRGB * finalAlpha, finalAlpha);
     }
