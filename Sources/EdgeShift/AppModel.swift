@@ -410,6 +410,7 @@ final class AppModel: ObservableObject {
               !CGEventSource.buttonState(.combinedSessionState, button: .center) else { reset(); return }
         let dx = CGFloat(event.getIntegerValueField(.mouseEventDeltaX))
         let dy = CGFloat(event.getIntegerValueField(.mouseEventDeltaY))
+        if dx == 0 && dy == 0 { return }
         guard let edge = LayoutGeometry.outwardEdge(point: p, deltaX: dx, deltaY: dy, main: s.main),
               !s.secondaries.contains(where: { LayoutGeometry.traversable(edge: edge, at: p, main: s.main, secondary: $0.bounds) }),
               !pauseSettings.reservedSides.contains(edge) else { reset(); return }
