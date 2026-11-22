@@ -8,6 +8,7 @@ import Foundation
         DisplayModeChecks.model(expect: expect)
         DisplayModeChecks.mainDisplayConfiguration(expect: expect)
         DisplayModeChecks.mainDisplayModel(expect: expect)
+        DisplayModeChecks.arrangementTransaction(expect: expect)
         print("Display mode checks passed: main display selection with relative layout, mixed topology, per-display requests, dependency guards, failures, readback, timeout and hot-plug selection.")
     }
 }

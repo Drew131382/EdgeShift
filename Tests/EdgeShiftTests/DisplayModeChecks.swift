@@ -6,6 +6,47 @@ import CoreGraphics
 
 // Shared by XCTest and the Command Line Tools runner; all display writes are mocked.
 enum DisplayModeChecks {
+    static func arrangementTransaction(expect: @escaping (Bool, String) -> Void) {
+        let suite = "org.edgeshift.arrangementchecks.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "enabled")
+        var observed: DisplayTopology? = topology([display(1), display(2)])
+        var reads = 0
+        var pending: ((String?) -> Void)?
+        var queued = true
+        var results: [Bool] = []
+        let model = AppModel(defaults: defaults, startsServices: false, readTopology: {
+            reads += 1
+            return observed
+        }, applyArrangement: { _, id, origin, completion in
+            expect(id == 2 && origin == CGPoint(x: -1920, y: 0), "异步排列使用选中的目标与合法位置")
+            if queued { pending = completion; return true }
+            completion("模拟立即拒绝")
+            return false
+        })
+        expect(model.moveAsync(displayID: 2, edge: .left) { results.append($0) }, "有效排列进入异步配置")
+        let before = reads
+        model.refresh()
+        model.refresh()
+        expect(reads == before, "配置过程中不在主线程轮询 WindowServer")
+        expect(!model.moveAsync(displayID: 2, edge: .left) { results.append($0) }, "配置期间拒绝重复排列")
+        observed = topology([display(1), display(2, origin: CGPoint(x: -1920, y: 0))])
+        pending?(nil)
+        pending = nil
+        expect(results == [true] && reads > before && model.snapshot?.secondaries.first?.bounds.minX == -1920,
+               "完成后恢复查询并回读真实排列")
+        expect(model.moveAsync(displayID: 2, edge: .left) { results.append($0) }, "完成后可以接收下一次请求")
+        pending?("模拟提交失败")
+        pending = nil
+        expect(results == [true, false] && model.notice == "模拟提交失败", "提交失败不会伪报成功")
+        queued = false
+        expect(!model.moveAsync(displayID: 2, edge: .left) { results.append($0) }, "立即拒绝返回未启动")
+        let after = reads
+        model.refresh()
+        expect(reads > after && results == [true, false, false], "立即失败后仍恢复查询")
+    }
+
     static func display(_ id: CGDirectDisplayID, source: CGDirectDisplayID? = nil, active: Bool = true,
                         origin: CGPoint? = nil) -> ConnectedDisplay {
         ConnectedDisplay(id: id, bounds: CGRect(origin: origin ?? CGPoint(x: Int((source ?? id) - 1) * 1920, y: 0),

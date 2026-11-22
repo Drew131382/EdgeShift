@@ -19,11 +19,17 @@ enum EdgeShiftMain {
 }
 
 @MainActor
-final class MenuBarController: NSObject, NSApplicationDelegate {
+final class MenuBarController: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let model = AppModel()
     private var statusItem: NSStatusItem?
     private var progressObserver: AnyCancellable?
-    private lazy var popover = Self.makePopover(model: model)
+    private var outsideClickMonitor: Any?
+    private var localClickMonitor: Any?
+    private lazy var popover: NSPopover = {
+        let popover = Self.makePopover(model: model)
+        popover.delegate = self
+        return popover
+    }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -63,6 +69,47 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    func popoverDidShow(_ notification: Notification) {
+        stopClickMonitors()
+        let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: clicks) { [weak self] _ in
+            DispatchQueue.main.async { self?.popover.performClose(nil) }
+        }
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: clicks) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, self.popover.isShown else { return }
+                // Native Picker menus and the status button handle their own clicks.
+                // Returning the event lets the clicked control receive it normally.
+                if let window = event.window {
+                    if window === self.popover.contentViewController?.view.window || window.level == .popUpMenu {
+                        return
+                    }
+                    if let button = self.statusItem?.button, window === button.window,
+                       button.bounds.contains(button.convert(event.locationInWindow, from: nil)) {
+                        return
+                    }
+                }
+                self.popover.performClose(nil)
+            }
+            return event
+        }
+    }
+
+    func popoverDidClose(_ notification: Notification) { stopClickMonitors() }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        if popover.isShown { popover.performClose(nil) }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) { stopClickMonitors() }
+
+    private func stopClickMonitors() {
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
+        outsideClickMonitor = nil
+        localClickMonitor = nil
     }
 }
 
@@ -140,6 +187,7 @@ struct ContentView: View {
                 Picker("持续推动", selection: $model.duration) {
                     Text("0.3 秒").tag(0.3)
                     Text("0.5 秒").tag(0.5)
+                    Text("0.7 秒").tag(0.7)
                     Text("1 秒").tag(1.0)
                     Text("2 秒").tag(2.0)
                     Text("3 秒").tag(3.0)
@@ -150,10 +198,16 @@ struct ContentView: View {
                 .opacity(model.progress > 0 ? 1 : 0)
                 .accessibilityHidden(model.progress <= 0)
             Toggle("登录时自动启动", isOn: Binding(get: { model.loginEnabled }, set: { model.setLogin($0) }))
-            Toggle("边缘切换水波折射", isOn: $model.rippleEnabled)
+            HStack {
+                Toggle("边缘切换水波折射", isOn: $model.rippleEnabled)
+                Button("预览") { model.previewRipple() }
+                    .controlSize(.small)
+                    .disabled(!model.rippleEnabled || model.isChangingDisplays)
+                    .help("在主屏左侧预览水波效果")
+            }
             if model.rippleEnabled && !model.screenCapturePermission {
                 HStack(spacing: 8) {
-                    Text("真实桌面像素折射需“屏幕录制”权限")
+                    Text("实时桌面折射需“屏幕录制”权限")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()

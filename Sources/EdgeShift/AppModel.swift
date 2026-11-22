@@ -4,6 +4,7 @@ import CoreGraphics
 import ServiceManagement
 
 final class AppModel: ObservableObject {
+    typealias ArrangeOperation = (DisplaySnapshot, CGDirectDisplayID, CGPoint, @escaping (String?) -> Void) -> Bool
     @Published private(set) var topology: DisplayTopology?
     @Published var snapshot: DisplaySnapshot?
     @Published private(set) var pendingDisplayModeChange: PendingDisplayModeChange?
@@ -15,7 +16,7 @@ final class AppModel: ObservableObject {
     @Published var rippleEnabled: Bool {
         didSet {
             defaults.set(rippleEnabled, forKey: "rippleEnabled")
-            if !rippleEnabled { endPushRipple() }
+            if !rippleEnabled { endPushRipple(); cancelRipplePreview() }
         }
     }
     @Published var duration: Double { didSet { defaults.set(duration, forKey: "duration"); invalidateAutomation() } }
@@ -40,12 +41,14 @@ final class AppModel: ObservableObject {
     private let readTopology: () -> DisplayTopology?
     private let applyDisplayMode: (DisplayTopology, CGDirectDisplayID, DisplayMode) -> String?
     private let applyMainDisplay: (DisplayTopology, CGDirectDisplayID) -> String?
+    private let applyArrangement: ArrangeOperation
     private let uptime: () -> TimeInterval
     private let ownBundleID = Bundle.main.bundleIdentifier ?? "com.edgeshift.app"
     private let foregroundMonitor = ForegroundMonitor()
     private var foregroundApplication: ForegroundApplication?
     private lazy var pauseSettingsWindow = PauseSettingsWindowController(model: self)
     private var cooldownUntil: TimeInterval = 0
+    private var lastScreenCaptureCheck: TimeInterval = -10
     private var isPushRippleActive = false
     private var rippleOverlay: WaterRippleOverlay?
     private var timer: Timer?
@@ -60,12 +63,15 @@ final class AppModel: ObservableObject {
              DisplayManager.setMode($0, displayID: $1, mode: $2)
          }, applyMainDisplay: @escaping (DisplayTopology, CGDirectDisplayID) -> String? = {
              DisplayManager.setMainDisplay($0, displayID: $1)
+         }, applyArrangement: @escaping ArrangeOperation = {
+             DisplayManager.arrangeAsync($0, displayID: $1, origin: $2, completion: $3)
          }, uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.defaults = defaults
         self.startsServices = startsServices
         self.readTopology = readTopology
         self.applyDisplayMode = applyDisplayMode
         self.applyMainDisplay = applyMainDisplay
+        self.applyArrangement = applyArrangement
         self.uptime = uptime
         enabled = defaults.object(forKey: "enabled") as? Bool ?? true
         rippleEnabled = defaults.object(forKey: "rippleEnabled") as? Bool ?? true
@@ -149,6 +155,7 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshAutomationContext() {
+        guard !isArranging else { return }
         let context = foregroundMonitor.snapshot()
         let reason = PausePolicy.reason(settings: pauseSettings, context: context,
                                         displays: topology?.independentDisplays.map(\.bounds) ?? [])
@@ -159,6 +166,9 @@ final class AppModel: ObservableObject {
         }
     }
     func refresh() {
+        // Avoid synchronous WindowServer queries while its configuration lock is
+        // held on the worker queue. The completion performs one fresh readback.
+        guard !isArranging else { return }
         let newTopology = readTopology()
         if newTopology != topology {
             if newTopology?.mainID != topology?.mainID || newTopology?.displays.map(\.id) != topology?.displays.map(\.id) ||
@@ -182,8 +192,12 @@ final class AppModel: ObservableObject {
         refreshPendingMainDisplayChange()
         let granted = CGPreflightListenEventAccess()
         if permission != granted { permission = granted; invalidateAutomation() }
-        let screenGranted = CGPreflightScreenCaptureAccess()
-        if screenCapturePermission != screenGranted { screenCapturePermission = screenGranted }
+        let now = uptime()
+        if now - lastScreenCaptureCheck >= 2 {
+            lastScreenCaptureCheck = now
+            let screenGranted = CGPreflightScreenCaptureAccess()
+            if screenCapturePermission != screenGranted { screenCapturePermission = screenGranted }
+        }
         refreshAutomationContext()
         if permission && notice == "请在系统设置的“隐私与安全性 → 输入监控”中开启 EdgeShift。" { notice = nil }
         let updatedStatus: String
@@ -273,7 +287,9 @@ final class AppModel: ObservableObject {
         notice = message
     }
     private func tick() {
+        guard !isArranging else { return }
         if pushSession.hasPush && ProcessInfo.processInfo.systemUptime - pushSession.last > 0.2 { reset() }
+        guard !pushSession.hasPush else { return }
         let wasPermission = permission
         refresh()
         if permission != wasPermission { updateTap() }
@@ -301,6 +317,7 @@ final class AppModel: ObservableObject {
     }
     func requestScreenCapturePermission() {
         _ = CGRequestScreenCaptureAccess()
+        lastScreenCaptureCheck = uptime()
         screenCapturePermission = CGPreflightScreenCaptureAccess()
         if !screenCapturePermission,
            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
@@ -323,6 +340,7 @@ final class AppModel: ObservableObject {
         pushSession.invalidate()
         if progress != 0 { progress = 0 }
         endPushRipple()
+        cancelRipplePreview()
     }
     @discardableResult
     func arrange(displayID: CGDirectDisplayID, origin: CGPoint) -> Bool {
@@ -346,6 +364,30 @@ final class AppModel: ObservableObject {
         let origin = LayoutGeometry.nextAvailableOrigin(edge: edge, main: s.main, target: target.bounds, obstacles: obstacles)
         return arrange(displayID: displayID, origin: origin)
     }
+    @discardableResult
+    func moveAsync(displayID: CGDirectDisplayID, edge: Side, completion: @escaping (Bool) -> Void) -> Bool {
+        guard let s = snapshot, !isArranging, !isChangingDisplays,
+              let target = s.secondaries.first(where: { $0.id == displayID }) else { return false }
+        let obstacles = s.displays.filter { $0.id != displayID && $0.id != s.mainID }.map(\.bounds)
+        let origin = LayoutGeometry.nextAvailableOrigin(edge: edge, main: s.main, target: target.bounds, obstacles: obstacles)
+        isArranging = true
+        pushSession.invalidate()
+        if progress != 0 { progress = 0 }
+        cancelRipplePreview()
+        return applyArrangement(s, displayID, origin) { [weak self] error in
+            guard let self else { return }
+            self.isArranging = false
+            self.refresh()
+            if let error {
+                self.notice = error
+                completion(false)
+            } else {
+                self.cooldownUntil = ProcessInfo.processInfo.systemUptime + 3
+                self.notice = "显示器排列已更新"
+                completion(true)
+            }
+        }
+    }
     private func updateTap() {
         guard startsServices else { return }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes); self.source = nil }
@@ -367,21 +409,49 @@ final class AppModel: ObservableObject {
     }
     private func withRippleOverlay(_ body: @escaping @MainActor (WaterRippleOverlay) -> Void) {
         guard startsServices else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let overlay = self.rippleOverlay ?? {
-                let created = WaterRippleOverlay()
-                self.rippleOverlay = created
-                return created
-            }()
-            body(overlay)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                let overlay = self.rippleOverlay ?? {
+                    let created = WaterRippleOverlay()
+                    self.rippleOverlay = created
+                    return created
+                }()
+                body(overlay)
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let overlay = self.rippleOverlay ?? {
+                    let created = WaterRippleOverlay()
+                    self.rippleOverlay = created
+                    return created
+                }()
+                body(overlay)
+            }
         }
     }
 
-    private func updatePushRipple(at point: CGPoint, displayID: CGDirectDisplayID, progress: Double) {
+    func previewRipple() {
+        guard rippleEnabled, !screenLocked, !isChangingDisplays else { return }
+        invalidateAutomation()
+        let displayID = topology?.mainID ?? CGMainDisplayID()
+        let previewDuration = duration
+        withRippleOverlay { overlay in
+            overlay.preview(displayID: displayID, duration: previewDuration)
+        }
+    }
+
+    private func cancelRipplePreview() {
+        guard startsServices else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.rippleOverlay?.cancelPreview()
+        }
+    }
+
+    private func updatePushRipple(at point: CGPoint, displayID: CGDirectDisplayID, edge: Side, progress: Double) {
         isPushRippleActive = true
         withRippleOverlay { overlay in
-            overlay.updatePush(at: point, displayID: displayID, progress: progress)
+            overlay.updatePush(at: point, displayID: displayID, edge: edge, progress: progress)
         }
     }
 
@@ -393,18 +463,21 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func triggerHighlightRipple(at point: CGPoint, displayID: CGDirectDisplayID) {
+    private func triggerHighlightRipple(at point: CGPoint, displayID: CGDirectDisplayID, edge: Side) {
         isPushRippleActive = false
         withRippleOverlay { overlay in
-            overlay.triggerHighlightWave(at: point, displayID: displayID)
+            overlay.triggerHighlightWave(at: point, displayID: displayID, edge: edge)
         }
     }
 
     private func handle(_ event: CGEvent) {
+        // Preserve the charged surface until the in-flight transaction finishes.
+        // Further mouse input cannot cancel a configuration already being applied.
+        guard !isArranging else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let p = event.location
 
-        guard automaticReady, !isArranging, now >= cooldownUntil, let s = snapshot,
+        guard automaticReady, now >= cooldownUntil, let s = snapshot,
               !CGEventSource.buttonState(.combinedSessionState, button: .left),
               !CGEventSource.buttonState(.combinedSessionState, button: .right),
               !CGEventSource.buttonState(.combinedSessionState, button: .center) else { reset(); return }
@@ -417,26 +490,45 @@ final class AppModel: ObservableObject {
         progress = pushSession.update(edge: edge, time: now, duration: duration, allowed: automaticReady)
         if progress >= 1 {
             cooldownUntil = now + 3
-            reset()
+            pushSession.reset()
+            if progress != 0 { progress = 0 }
             let ticket = pushSession.generation
             let ids = s.secondaries.map(\.id)
-            guard let target = displayCycle.next(in: ids) else { return }
+            guard let target = displayCycle.next(in: ids) else { endPushRipple(); return }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 // The app can change after the final mouse event but before this
                 // block runs. Refresh both protection and display geometry here.
                 self.refresh()
                 guard self.pushSession.permitsQueuedMove(ticket: ticket, allowed: self.automaticReady),
-                      self.snapshot == s else { return }
-                if self.move(displayID: target, edge: edge) {
-                    self.displayCycle.didMove(target)
-                    if self.rippleEnabled {
-                        self.triggerHighlightRipple(at: p, displayID: s.mainID)
+                      self.snapshot == s else {
+                    self.endPushRipple()
+                    return
+                }
+                if self.rippleEnabled {
+                    self.withRippleOverlay { $0.beginDisplayTransition() }
+                }
+                let started = self.moveAsync(displayID: target, edge: edge) { [weak self] ok in
+                    guard let self else { return }
+                    if self.rippleOverlay != nil {
+                        self.withRippleOverlay { $0.endDisplayTransition() }
                     }
+                    if ok && self.snapshot != s {
+                        self.displayCycle.didMove(target)
+                        if self.rippleEnabled && !self.screenLocked && self.topology?.mainID == s.mainID {
+                            self.triggerHighlightRipple(at: p, displayID: s.mainID, edge: edge)
+                            return
+                        }
+                    }
+                    self.endPushRipple()
+                }
+                if !started {
+                    if self.rippleOverlay != nil { self.withRippleOverlay { $0.endDisplayTransition() } }
+                    self.endPushRipple()
                 }
             }
         } else if rippleEnabled {
-            updatePushRipple(at: p, displayID: s.mainID, progress: progress)
+            updatePushRipple(at: p, displayID: s.mainID, edge: edge, progress: progress)
         } else {
             endPushRipple()
         }

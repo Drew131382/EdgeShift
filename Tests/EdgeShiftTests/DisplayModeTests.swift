@@ -1,6 +1,9 @@
 import XCTest
 
 final class DisplayModeTests: XCTestCase {
+    func testArrangementTransactionLifecycle() {
+        DisplayModeChecks.arrangementTransaction { XCTAssertTrue($0, $1) }
+    }
     func testTopologyClassification() {
         DisplayModeChecks.classification { XCTAssertTrue($0, $1) }
     }
