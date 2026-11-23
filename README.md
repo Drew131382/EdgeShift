@@ -6,6 +6,15 @@
   </a>
   &nbsp; <a href="https://github.com/drew131382-create/EdgeShift/releases/tag/v0.1.9">查看 Release 说明</a>
 </p>
+<p align="center">
+  <a href="https://github.com/Drew131382/EdgeShift/releases/download/v0.1.9/EdgeShift-Promo-CN-1080p60.mp4">
+    <img src="https://img.shields.io/badge/宣传视频%20(中文版)-1080p%2060fps-0a84ff?style=flat-square&logo=youtube&logoColor=white" alt="观看 EdgeShift 中文版宣传视频">
+  </a>
+  &nbsp;
+  <a href="https://github.com/Drew131382/EdgeShift/releases/download/v0.1.9/EdgeShift-Promo-1080p60.mp4">
+    <img src="https://img.shields.io/badge/Promo%20Video%20(EN)-1080p%2060fps-5856d6?style=flat-square&logo=youtube&logoColor=white" alt="Watch EdgeShift English Promo Video">
+  </a>
+</p>
 <p align="center"><sub>Apple Silicon（arm64）· macOS 13 或更新版本</sub></p>
 
 EdgeShift 是一个适用于 macOS 的多屏菜单栏应用（实验性原型）。当系统排列与实际摆放不一致时，可在主屏不可跨越的边缘持续向外推动鼠标，让副屏移动到对应方向；也可在菜单栏手动拖动排列。
