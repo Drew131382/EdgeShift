@@ -1,19 +1,24 @@
 # EdgeShift
 
 <p align="center">
+  <a href="https://github.com/Drew131382/EdgeShift/releases/download/v0.1.9/EdgeShift-Promo-CN-1080p60.mp4">
+    <img src="Assets/promo-cover-cn.jpg" alt="点击观看 EdgeShift 3D 宣传视频（中文版 · 1080p 60fps）" width="100%">
+  </a>
+</p>
+<p align="center">
+  <a href="https://github.com/Drew131382/EdgeShift/releases/download/v0.1.9/EdgeShift-Promo-CN-1080p60.mp4">
+    <img src="https://img.shields.io/badge/▶%20观看宣传视频%20(中文版)-1080p%2060fps-0a84ff?style=for-the-badge" alt="观看 EdgeShift 中文版宣传视频">
+  </a>
+  &nbsp;
+  <a href="https://github.com/Drew131382/EdgeShift/releases/download/v0.1.9/EdgeShift-Promo-1080p60.mp4">
+    <img src="https://img.shields.io/badge/▶%20Watch%20Promo%20(EN)-1080p%2060fps-5856d6?style=for-the-badge" alt="Watch EdgeShift English Promo Video">
+  </a>
+</p>
+<p align="center">
   <a href="https://github.com/drew131382-create/EdgeShift/releases/download/v0.1.9/EdgeShift-0.1.9-experimental.dmg">
     <img src="https://img.shields.io/badge/下载%20macOS%20DMG-v0.1.9-1677ff?style=for-the-badge&logo=apple&logoColor=white" alt="下载 EdgeShift macOS DMG v0.1.9">
   </a>
   &nbsp; <a href="https://github.com/drew131382-create/EdgeShift/releases/tag/v0.1.9">查看 Release 说明</a>
-</p>
-<p align="center">
-  <a href="https://github.com/Drew131382/EdgeShift/releases/download/v0.1.9/EdgeShift-Promo-CN-1080p60.mp4">
-    <img src="https://img.shields.io/badge/宣传视频%20(中文版)-1080p%2060fps-0a84ff?style=flat-square&logo=youtube&logoColor=white" alt="观看 EdgeShift 中文版宣传视频">
-  </a>
-  &nbsp;
-  <a href="https://github.com/Drew131382/EdgeShift/releases/download/v0.1.9/EdgeShift-Promo-1080p60.mp4">
-    <img src="https://img.shields.io/badge/Promo%20Video%20(EN)-1080p%2060fps-5856d6?style=flat-square&logo=youtube&logoColor=white" alt="Watch EdgeShift English Promo Video">
-  </a>
 </p>
 <p align="center"><sub>Apple Silicon（arm64）· macOS 13 或更新版本</sub></p>
 
