@@ -69,6 +69,27 @@ import CoreGraphics
         assert(LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 500, y: 795), to: CGPoint(x: 500, y: 805), main: base, secondaries: secs) == BoundaryCrossing(edge: .bottom, point: CGPoint(x: 500, y: 800)))
         assert(LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 100, y: 100), to: CGPoint(x: 200, y: 200), main: base, secondaries: secs) == nil)
         assert(LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 1100, y: 100), to: CGPoint(x: 1200, y: 200), main: base, secondaries: secs) == nil)
+        let switchRight = CGRect(x: 1000, y: 100, width: 600, height: 600)
+        precondition(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 999, y: 400), edge: .right, targetBounds: switchRight) ==
+                BoundaryCrossing(edge: .left, point: CGPoint(x: 1000, y: 400))
+        )
+        precondition(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 999, y: 20), edge: .right, targetBounds: switchRight) ==
+                BoundaryCrossing(edge: .left, point: CGPoint(x: 1000, y: 100))
+        )
+        precondition(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 0, y: 400), edge: .left, targetBounds: leftSec) ==
+                BoundaryCrossing(edge: .right, point: CGPoint(x: 0, y: 400))
+        )
+        precondition(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 500, y: 0), edge: .top, targetBounds: topSec) ==
+                BoundaryCrossing(edge: .bottom, point: CGPoint(x: 500, y: 0))
+        )
+        precondition(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 500, y: 799), edge: .bottom, targetBounds: bottomSec) ==
+                BoundaryCrossing(edge: .top, point: CGPoint(x: 500, y: 800))
+        )
         print("Layout and push logic checks passed.")
     }
 }

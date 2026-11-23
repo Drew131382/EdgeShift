@@ -111,4 +111,31 @@ final class GeometryTests: XCTestCase {
         XCTAssertNil(LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 100, y: 100), to: CGPoint(x: 200, y: 200), main: main, secondaries: secondaries))
         XCTAssertNil(LayoutGeometry.mainBoundaryCrossing(from: CGPoint(x: 1100, y: 100), to: CGPoint(x: 1200, y: 200), main: main, secondaries: secondaries))
     }
+
+    func testSwitchedSecondaryWaveOriginProjectsAndClampsToOppositeEdge() {
+        let rightTarget = CGRect(x: 1920, y: 140, width: 1440, height: 800)
+        XCTAssertEqual(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 1919, y: 500), edge: .right, targetBounds: rightTarget),
+            BoundaryCrossing(edge: .left, point: CGPoint(x: 1920, y: 500))
+        )
+        XCTAssertEqual(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 1919, y: 40), edge: .right, targetBounds: rightTarget),
+            BoundaryCrossing(edge: .left, point: CGPoint(x: 1920, y: 140))
+        )
+        let leftTarget = CGRect(x: -1440, y: 140, width: 1440, height: 800)
+        XCTAssertEqual(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 0, y: 500), edge: .left, targetBounds: leftTarget),
+            BoundaryCrossing(edge: .right, point: CGPoint(x: 0, y: 500))
+        )
+        let topTarget = CGRect(x: 240, y: -800, width: 1440, height: 800)
+        XCTAssertEqual(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 960, y: 0), edge: .top, targetBounds: topTarget),
+            BoundaryCrossing(edge: .bottom, point: CGPoint(x: 960, y: 0))
+        )
+        let bottomTarget = CGRect(x: 240, y: 1080, width: 1440, height: 800)
+        XCTAssertEqual(
+            LayoutGeometry.switchedSecondaryWaveOrigin(pushPoint: CGPoint(x: 1800, y: 1079), edge: .bottom, targetBounds: bottomTarget),
+            BoundaryCrossing(edge: .top, point: CGPoint(x: 1680, y: 1080))
+        )
+    }
 }

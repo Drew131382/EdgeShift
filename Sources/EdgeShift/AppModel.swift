@@ -3,6 +3,15 @@ import Combine
 import CoreGraphics
 import ServiceManagement
 
+struct SwitchRippleEvent: Equatable {
+    let mainDisplayID: CGDirectDisplayID
+    let mainEdge: Side
+    let mainPoint: CGPoint
+    let secondaryDisplayID: CGDirectDisplayID
+    let secondaryEdge: Side
+    let secondaryPoint: CGPoint
+}
+
 final class AppModel: ObservableObject {
     typealias ArrangeOperation = (DisplaySnapshot, CGDirectDisplayID, CGPoint, @escaping (String?) -> Void) -> Bool
     @Published private(set) var topology: DisplayTopology?
@@ -16,7 +25,7 @@ final class AppModel: ObservableObject {
     @Published var rippleEnabled: Bool {
         didSet {
             defaults.set(rippleEnabled, forKey: "rippleEnabled")
-            if !rippleEnabled { endPushRipple(); cancelRipplePreview() }
+            if !rippleEnabled { stopAllRipples() }
         }
     }
     @Published var duration: Double { didSet { defaults.set(duration, forKey: "duration"); invalidateAutomation() } }
@@ -42,6 +51,7 @@ final class AppModel: ObservableObject {
     private let applyDisplayMode: (DisplayTopology, CGDirectDisplayID, DisplayMode) -> String?
     private let applyMainDisplay: (DisplayTopology, CGDirectDisplayID) -> String?
     private let applyArrangement: ArrangeOperation
+    private let onSwitchRipple: ((SwitchRippleEvent) -> Void)?
     private let uptime: () -> TimeInterval
     private let ownBundleID = Bundle.main.bundleIdentifier ?? "com.edgeshift.app"
     private let foregroundMonitor = ForegroundMonitor()
@@ -65,13 +75,15 @@ final class AppModel: ObservableObject {
              DisplayManager.setMainDisplay($0, displayID: $1)
          }, applyArrangement: @escaping ArrangeOperation = {
              DisplayManager.arrangeAsync($0, displayID: $1, origin: $2, completion: $3)
-         }, uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+         }, onSwitchRipple: ((SwitchRippleEvent) -> Void)? = nil,
+         uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.defaults = defaults
         self.startsServices = startsServices
         self.readTopology = readTopology
         self.applyDisplayMode = applyDisplayMode
         self.applyMainDisplay = applyMainDisplay
         self.applyArrangement = applyArrangement
+        self.onSwitchRipple = onSwitchRipple
         self.uptime = uptime
         enabled = defaults.object(forKey: "enabled") as? Bool ?? true
         rippleEnabled = defaults.object(forKey: "rippleEnabled") as? Bool ?? true
@@ -98,7 +110,7 @@ final class AppModel: ObservableObject {
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(lockScreen), name: Notification.Name("com.apple.screenIsLocked"), object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(unlockScreen), name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
     }
-    @objc private func lockScreen() { screenLocked = true; invalidateAutomation() }
+    @objc private func lockScreen() { screenLocked = true; invalidateAutomation(); stopAllRipples() }
     @objc private func unlockScreen() { screenLocked = false; invalidateAutomation(); refresh() }
     @objc private func wake() { invalidateAutomation(); refresh(); updateTap() }
     @objc private func frontmostChanged() { refreshAutomationContext() }
@@ -470,6 +482,56 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func triggerSwitchRipples(_ event: SwitchRippleEvent) {
+        isPushRippleActive = false
+        if let onSwitchRipple {
+            onSwitchRipple(event)
+            return
+        }
+        withRippleOverlay { overlay in
+            overlay.triggerSwitchRipples(
+                mainPoint: event.mainPoint, mainDisplayID: event.mainDisplayID, mainEdge: event.mainEdge,
+                secondaryPoint: event.secondaryPoint, secondaryDisplayID: event.secondaryDisplayID, secondaryEdge: event.secondaryEdge
+            )
+        }
+    }
+
+    func finishAutomaticSwitch(target: CGDirectDisplayID, previousSnapshot s: DisplaySnapshot,
+                               edge: Side, point p: CGPoint, succeeded ok: Bool) {
+        if rippleOverlay != nil {
+            withRippleOverlay { $0.endDisplayTransition() }
+        }
+        if ok && snapshot != s {
+            displayCycle.didMove(target)
+            if rippleEnabled && !screenLocked && topology?.mainID == s.mainID {
+                if let targetBounds = snapshot?.displays.first(where: { $0.id == target })?.bounds {
+                    let secondary = LayoutGeometry.switchedSecondaryWaveOrigin(
+                        pushPoint: p, edge: edge, targetBounds: targetBounds)
+                    triggerSwitchRipples(SwitchRippleEvent(
+                        mainDisplayID: s.mainID, mainEdge: edge, mainPoint: p,
+                        secondaryDisplayID: target, secondaryEdge: secondary.edge, secondaryPoint: secondary.point
+                    ))
+                } else {
+                    triggerHighlightRipple(at: p, displayID: s.mainID, edge: edge)
+                }
+                return
+            }
+        }
+        endPushRipple()
+    }
+
+    private func stopAllRipples() {
+        isPushRippleActive = false
+        guard startsServices else { return }
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { rippleOverlay?.stopAll() }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.rippleOverlay?.stopAll()
+            }
+        }
+    }
+
     private func handle(_ event: CGEvent) {
         // Preserve the charged surface until the in-flight transaction finishes.
         // Further mouse input cannot cancel a configuration already being applied.
@@ -509,18 +571,7 @@ final class AppModel: ObservableObject {
                     self.withRippleOverlay { $0.beginDisplayTransition() }
                 }
                 let started = self.moveAsync(displayID: target, edge: edge) { [weak self] ok in
-                    guard let self else { return }
-                    if self.rippleOverlay != nil {
-                        self.withRippleOverlay { $0.endDisplayTransition() }
-                    }
-                    if ok && self.snapshot != s {
-                        self.displayCycle.didMove(target)
-                        if self.rippleEnabled && !self.screenLocked && self.topology?.mainID == s.mainID {
-                            self.triggerHighlightRipple(at: p, displayID: s.mainID, edge: edge)
-                            return
-                        }
-                    }
-                    self.endPushRipple()
+                    self?.finishAutomaticSwitch(target: target, previousSnapshot: s, edge: edge, point: p, succeeded: ok)
                 }
                 if !started {
                     if self.rippleOverlay != nil { self.withRippleOverlay { $0.endDisplayTransition() } }

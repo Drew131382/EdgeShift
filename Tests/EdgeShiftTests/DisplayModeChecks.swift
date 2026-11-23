@@ -285,4 +285,60 @@ enum DisplayModeChecks {
         expect(!model.isChangingDisplays && model.topology?.mainID == 3 && model.notice?.contains("系统同时调整") == true,
                "系统调整相对布局时显示提醒")
     }
+
+    static func switchRipples(expect: @escaping (Bool, String) -> Void) {
+        let suite = "org.edgeshift.switchripplechecks.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "enabled")
+        defaults.set(true, forKey: "rippleEnabled")
+
+        var observed: DisplayTopology? = topology([display(1), display(2, origin: CGPoint(x: 1920, y: 0))])
+        var events: [SwitchRippleEvent] = []
+        var pendingArrange: ((String?) -> Void)?
+        let model = AppModel(
+            defaults: defaults,
+            startsServices: false,
+            readTopology: { observed },
+            applyArrangement: { _, _, _, completion in
+                pendingArrange = completion
+                return true
+            },
+            onSwitchRipple: { events.append($0) }
+        )
+
+        let before = model.snapshot!
+        let pushPoint = CGPoint(x: 0, y: 540)
+        expect(model.moveAsync(displayID: 2, edge: .left) { ok in
+            model.finishAutomaticSwitch(target: 2, previousSnapshot: before, edge: .left, point: pushPoint, succeeded: ok)
+        }, "发起向左侧切换副屏")
+        observed = topology([display(1), display(2, origin: CGPoint(x: -1920, y: 0))])
+        pendingArrange?(nil)
+        pendingArrange = nil
+
+        expect(events == [SwitchRippleEvent(
+            mainDisplayID: 1, mainEdge: .left, mainPoint: pushPoint,
+            secondaryDisplayID: 2, secondaryEdge: .right, secondaryPoint: CGPoint(x: 0, y: 540)
+        )], "屏幕切换成功瞬间在主屏和刚切换过来的副屏接缝两侧同步触发波纹")
+
+        // Failed arrangement or unchanged snapshot does not trigger switch ripples.
+        let secondBefore = model.snapshot!
+        expect(model.moveAsync(displayID: 2, edge: .right) { ok in
+            model.finishAutomaticSwitch(target: 2, previousSnapshot: secondBefore, edge: .right, point: CGPoint(x: 1919, y: 400), succeeded: ok)
+        }, "发起向右侧切换副屏（模拟失败）")
+        pendingArrange?("模拟失败")
+        pendingArrange = nil
+        expect(events.count == 1, "切换失败时不触发副屏波纹")
+
+        // Disabling rippleEnabled suppresses switch ripples even on a successful switch.
+        model.rippleEnabled = false
+        let thirdBefore = model.snapshot!
+        expect(model.moveAsync(displayID: 2, edge: .right) { ok in
+            model.finishAutomaticSwitch(target: 2, previousSnapshot: thirdBefore, edge: .right, point: CGPoint(x: 1919, y: 400), succeeded: ok)
+        }, "关闭水波后再次切换副屏")
+        observed = topology([display(1), display(2, origin: CGPoint(x: 1920, y: 0))])
+        pendingArrange?(nil)
+        pendingArrange = nil
+        expect(events.count == 1, "关闭水波折射后不触发任何切换动画")
+    }
 }

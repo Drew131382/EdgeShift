@@ -19,4 +19,7 @@ final class DisplayModeTests: XCTestCase {
     func testMainDisplayLifecycle() {
         DisplayModeChecks.mainDisplayModel { XCTAssertTrue($0, $1) }
     }
+    func testSwitchRipples() {
+        DisplayModeChecks.switchRipples { XCTAssertTrue($0, $1) }
+    }
 }

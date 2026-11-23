@@ -2,7 +2,18 @@ import Foundation
 
 import CoreGraphics
 
-enum Side: String, Codable, Hashable { case left, right, top, bottom }
+enum Side: String, Codable, Hashable {
+    case left, right, top, bottom
+
+    var opposite: Side {
+        switch self {
+        case .left: return .right
+        case .right: return .left
+        case .top: return .bottom
+        case .bottom: return .top
+        }
+    }
+}
 
 struct BoundaryCrossing: Equatable {
     let edge: Side
@@ -65,37 +76,52 @@ enum LayoutGeometry {
         guard fromInMain != toInMain else { return nil }
         let outside = fromInMain ? to : from
         guard secondaries.contains(where: { $0.contains(outside) }) else { return nil }
+        return rectExit(from: fromInMain ? from : to, to: outside, rect: main)
+    }
 
-        let inside = fromInMain ? from : to
+    static func switchedSecondaryWaveOrigin(pushPoint: CGPoint, edge: Side, targetBounds: CGRect) -> BoundaryCrossing {
+        let targetEdge = edge.opposite
+        let point: CGPoint
+        switch targetEdge {
+        case .left:
+            point = CGPoint(x: targetBounds.minX, y: clamp(pushPoint.y, targetBounds.minY, targetBounds.maxY))
+        case .right:
+            point = CGPoint(x: targetBounds.maxX, y: clamp(pushPoint.y, targetBounds.minY, targetBounds.maxY))
+        case .top:
+            point = CGPoint(x: clamp(pushPoint.x, targetBounds.minX, targetBounds.maxX), y: targetBounds.minY)
+        case .bottom:
+            point = CGPoint(x: clamp(pushPoint.x, targetBounds.minX, targetBounds.maxX), y: targetBounds.maxY)
+        }
+        return BoundaryCrossing(edge: targetEdge, point: point)
+    }
+
+    private static func rectExit(from inside: CGPoint, to outside: CGPoint, rect: CGRect) -> BoundaryCrossing? {
         let dx = outside.x - inside.x
         let dy = outside.y - inside.y
         var hits: [(t: CGFloat, crossing: BoundaryCrossing)] = []
 
-        if dx < 0, outside.x < main.minX {
-            let t = (main.minX - inside.x) / dx
-            let y = clamp(inside.y + t * dy, main.minY, main.maxY)
-            if t >= 0, t <= 1 { hits.append((t, BoundaryCrossing(edge: .left, point: CGPoint(x: main.minX, y: y)))) }
+        if dx < 0, outside.x < rect.minX {
+            let t = (rect.minX - inside.x) / dx
+            let y = clamp(inside.y + t * dy, rect.minY, rect.maxY)
+            if t >= 0, t <= 1 { hits.append((t, BoundaryCrossing(edge: .left, point: CGPoint(x: rect.minX, y: y)))) }
         }
-        if dx > 0, outside.x >= main.maxX {
-            let t = (main.maxX - inside.x) / dx
-            let y = clamp(inside.y + t * dy, main.minY, main.maxY)
-            if t >= 0, t <= 1 { hits.append((t, BoundaryCrossing(edge: .right, point: CGPoint(x: main.maxX, y: y)))) }
+        if dx > 0, outside.x >= rect.maxX {
+            let t = (rect.maxX - inside.x) / dx
+            let y = clamp(inside.y + t * dy, rect.minY, rect.maxY)
+            if t >= 0, t <= 1 { hits.append((t, BoundaryCrossing(edge: .right, point: CGPoint(x: rect.maxX, y: y)))) }
         }
-        if dy < 0, outside.y < main.minY {
-            let t = (main.minY - inside.y) / dy
-            let x = clamp(inside.x + t * dx, main.minX, main.maxX)
-            if t >= 0, t <= 1 { hits.append((t, BoundaryCrossing(edge: .top, point: CGPoint(x: x, y: main.minY)))) }
+        if dy < 0, outside.y < rect.minY {
+            let t = (rect.minY - inside.y) / dy
+            let x = clamp(inside.x + t * dx, rect.minX, rect.maxX)
+            if t >= 0, t <= 1 { hits.append((t, BoundaryCrossing(edge: .top, point: CGPoint(x: x, y: rect.minY)))) }
         }
-        if dy > 0, outside.y >= main.maxY {
-            let t = (main.maxY - inside.y) / dy
-            let x = clamp(inside.x + t * dx, main.minX, main.maxX)
-            if t >= 0, t <= 1 { hits.append((t, BoundaryCrossing(edge: .bottom, point: CGPoint(x: x, y: main.maxY)))) }
+        if dy > 0, outside.y >= rect.maxY {
+            let t = (rect.maxY - inside.y) / dy
+            let x = clamp(inside.x + t * dx, rect.minX, rect.maxX)
+            if t >= 0, t <= 1 { hits.append((t, BoundaryCrossing(edge: .bottom, point: CGPoint(x: x, y: rect.maxY)))) }
         }
 
-        if let first = hits.min(by: { $0.t < $1.t }) {
-            return first.crossing
-        }
-        return nil
+        return hits.min(by: { $0.t < $1.t })?.crossing
     }
 
     static func centeredOrigin(edge: Side, main: CGRect, secondary: CGRect) -> CGPoint {
